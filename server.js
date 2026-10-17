@@ -15,10 +15,33 @@ const { print } = require('pdf-to-printer');
 const PORT = Number(process.env.PRINT_PORT || 5123);
 const PRINTER_NAME = process.env.PRINTER_NAME || 'XP-80C'; // đổi nếu tên Windows khác
 
+// Thứ tự tìm font:
+//   1) file trong ./fonts (Roboto - khuyến nghị)
+//   2) font hệ thống Windows có hỗ trợ dấu tiếng Việt (Segoe UI / Arial / Tahoma)
+//   3) font built-in của PDFKit (KHÔNG có dấu tiếng Việt - chỉ dùng khi bất khả kháng)
+const SYSTEM_FONTS_DIR = process.platform === 'win32'
+  ? path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts')
+  : null;
+
+function pickFont(relPath, fallback, systemFiles = []) {
+  const candidates = [path.join(__dirname, relPath)];
+  if (SYSTEM_FONTS_DIR) {
+    for (const f of systemFiles) candidates.push(path.join(SYSTEM_FONTS_DIR, f));
+  }
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  console.warn(`[fonts] Không thấy "${relPath}" — dùng fallback "${fallback}".`);
+  return fallback;
+}
+
 const FONTS = {
-  regular: path.join(__dirname, 'fonts', 'Roboto-Regular.ttf'),
-  semibold: path.join(__dirname, 'fonts', 'Roboto-SemiBold.ttf'),
-  bold: path.join(__dirname, 'fonts', 'Roboto-Bold.ttf'),
+  regular:  pickFont(path.join('fonts', 'Roboto-Regular.ttf'),  'Helvetica',
+                     ['segoeui.ttf', 'arial.ttf', 'tahoma.ttf']),
+  semibold: pickFont(path.join('fonts', 'Roboto-SemiBold.ttf'), 'Helvetica-Bold',
+                     ['segoeuib.ttf', 'arialbd.ttf', 'tahomabd.ttf']),
+  bold:     pickFont(path.join('fonts', 'Roboto-Bold.ttf'),     'Helvetica-Bold',
+                     ['segoeuib.ttf', 'arialbd.ttf', 'tahomabd.ttf']),
 };
 
 // Thông tin quán
@@ -47,6 +70,58 @@ const COLS = {
 function vnd(n) {
   if (n == null || isNaN(Number(n))) return '';
   return Number(n).toLocaleString('vi-VN') + 'đ';
+}
+
+// Nhãn hiển thị cho meta_data (WooCommerce) của mỗi món
+const META_LABEL = { size: 'Size', toppings: 'Topping', sugar: 'Đường', ice: 'Đá', notes: 'Ghi chú' };
+// Thứ tự in các tuỳ chọn. Bỏ "size" vì size đã nằm trong tên món (vd "Americano (L)").
+const META_ORDER = ['toppings', 'sugar', 'ice', 'notes'];
+
+// Chuẩn hoá tuỳ chọn của 1 món thành mảng dòng để in dưới tên món.
+// Chấp nhận cả 2 dạng:
+//   - item.options:    ["+ Matcha Thêm", "Đường: Full"] (đã chuẩn hoá sẵn)
+//   - item.meta_data:  [{ key, value, display_value }]  (dạng WooCommerce trả về)
+function buildItemOptions(item) {
+  const lines = [];
+
+  if (Array.isArray(item.options)) {
+    for (const o of item.options) {
+      if (typeof o === 'string' && o.trim()) {
+        lines.push(o.trim());
+      } else if (o && typeof o === 'object' && (o.value ?? o.display_value) != null) {
+        const label = o.label ?? o.display_key ?? o.key;
+        const val = o.value ?? o.display_value;
+        lines.push(label ? `${label}: ${val}` : String(val));
+      }
+    }
+  }
+
+  if (Array.isArray(item.meta_data)) {
+    const map = {};
+    for (const m of item.meta_data) {
+      if (!m) continue;
+      const key = m.key ?? m.display_key;
+      const val = m.display_value ?? m.value;
+      if (key != null) map[key] = val == null ? '' : String(val);
+    }
+    for (const key of META_ORDER) {
+      const raw = String(map[key] ?? '').trim();
+      if (!raw) continue;
+      if (key === 'toppings') {
+        // Topping cách nhau bởi dấu phẩy -> tách mỗi loại 1 dòng
+        for (const t of raw.split(',')) {
+          const v = t.trim();
+          if (v) lines.push(`+ ${v}`);
+        }
+      } else if (key === 'notes') {
+        lines.push(raw);
+      } else {
+        lines.push(`${META_LABEL[key] || key}: ${raw}`);
+      }
+    }
+  }
+
+  return lines;
 }
 
 // Vẽ đường kẻ vector (không dùng chuỗi gạch)
@@ -154,8 +229,21 @@ function drawItemRow(doc, item, index) {
   doc.text(vnd(price),  x + COLS.name + COLS.qty, yStart, { width: COLS.price, align: 'right' });
   doc.text(vnd(amount), x + COLS.name + COLS.qty + COLS.price, yStart, { width: COLS.amount, align: 'right' });
 
+  // In các tuỳ chọn (topping, đường, đá, ghi chú...) thụt lề dưới tên món
+  let y = yStart + rowHeight + 2;
+  const options = buildItemOptions(item);
+  if (options.length) {
+    const optIndent = 8;
+    const optWidth = CONTENT_W - optIndent;
+    doc.font(FONTS.regular).fontSize(9);
+    for (const opt of options) {
+      doc.text(opt, x + optIndent, y, { width: optWidth, align: 'left' });
+      y += doc.heightOfString(opt, { width: optWidth, align: 'left' }) + 1;
+    }
+  }
+
   // Kết thúc hàng
-  doc.y = yStart + rowHeight + 2;
+  doc.y = y + 1;
 }
 
 function drawTotals(doc, order) {
@@ -246,17 +334,49 @@ app.get('/test', async (req, res) => {
       cashier: 'Admin',
       customer: '',
       items: [
-        { name: 'Matcha Latte', qty: 1, price: 35000 },
-        { name: 'Matcha Nước Dừa size L', qty: 2, price: 45000 },
-        { name: 'Americano (Đá)', qty: 1, price: 25000 },
+        {
+          name: 'Americano (L)', qty: 1, price: 65000,
+          meta_data: [
+            { key: 'size', value: 'L' },
+            { key: 'toppings', value: 'Matcha Thêm, Kem mặn Thêm' },
+            { key: 'sugar', value: 'Full' },
+            { key: 'ice', value: 'Full' },
+            { key: 'notes', value: '' },
+          ],
+        },
+        {
+          name: 'Coldbrew (L)', qty: 1, price: 70000,
+          meta_data: [
+            { key: 'size', value: 'L' },
+            { key: 'toppings', value: 'Matcha Thêm, Kem mặn Thêm' },
+            { key: 'sugar', value: 'Full' },
+            { key: 'ice', value: 'Full' },
+            { key: 'notes', value: '' },
+          ],
+        },
+        { name: 'Matcha Latte', qty: 2, price: 35000 },
+        {
+          name: 'Bạc xỉu', qty: 1, price: 30000,
+          meta_data: [
+            { key: 'sugar', value: 'Ít' },
+            { key: 'ice', value: 'Không' },
+            { key: 'notes', value: 'Không sữa' },
+          ],
+        },
       ],
       discount: 0,
       service: 0,
       method: 'Tiền mặt',
       // amountInWords: 'Một trăm bốn mươi lăm nghìn đồng chẵn.',
     });
-    await print(tmpPdf, { printer: PRINTER_NAME });
-    res.json({ ok: true, file: tmpPdf, printer: PRINTER_NAME });
+
+    // ===== TẠM COMMENT PHẦN IN: chỉ tạo PDF để xem trước, chưa gửi ra máy in =====
+    // await print(tmpPdf, { printer: PRINTER_NAME });
+
+    // Trả thẳng PDF cho browser hiển thị preview (giống mở file PDF rồi Ctrl+P)
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="bill-preview.pdf"');
+    return fs.createReadStream(tmpPdf).pipe(res);
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -268,8 +388,10 @@ app.post('/print', async (req, res) => {
   try {
     const tmpPdf = path.join(os.tmpdir(), `order_${Date.now()}.pdf`);
     await createBillPdf(tmpPdf, order);
-    await print(tmpPdf, { printer: PRINTER_NAME });
-    res.json({ ok: true, file: tmpPdf, printer: PRINTER_NAME });
+
+    // ===== TẠM COMMENT PHẦN IN: chỉ tạo PDF, chưa gửi ra máy in =====
+    // await print(tmpPdf, { printer: PRINTER_NAME });
+    res.json({ ok: true, file: tmpPdf, printer: PRINTER_NAME, printed: false });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
