@@ -233,7 +233,7 @@ function drawItemRow(doc, item, index) {
   let y = yStart + rowHeight + 2;
   const options = buildItemOptions(item);
   if (options.length) {
-    const optIndent = 8;
+    const optIndent = 14;
     const optWidth = CONTENT_W - optIndent;
     doc.font(FONTS.regular).fontSize(9);
     for (const opt of options) {
@@ -370,13 +370,14 @@ app.get('/test', async (req, res) => {
       // amountInWords: 'Một trăm bốn mươi lăm nghìn đồng chẵn.',
     });
 
-    // ===== TẠM COMMENT PHẦN IN: chỉ tạo PDF để xem trước, chưa gửi ra máy in =====
-    // await print(tmpPdf, { printer: PRINTER_NAME });
+    // ===== PREVIEW: comment lại phần này để không xuất PDF xem trước nữa =====
+    // res.setHeader('Content-Type', 'application/pdf');
+    // res.setHeader('Content-Disposition', 'inline; filename="bill-preview.pdf"');
+    // return fs.createReadStream(tmpPdf).pipe(res);
 
-    // Trả thẳng PDF cho browser hiển thị preview (giống mở file PDF rồi Ctrl+P)
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'inline; filename="bill-preview.pdf"');
-    return fs.createReadStream(tmpPdf).pipe(res);
+    // In thật ra máy in
+    await print(tmpPdf, { printer: PRINTER_NAME });
+    res.json({ ok: true, file: tmpPdf, printer: PRINTER_NAME });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -389,9 +390,9 @@ app.post('/print', async (req, res) => {
     const tmpPdf = path.join(os.tmpdir(), `order_${Date.now()}.pdf`);
     await createBillPdf(tmpPdf, order);
 
-    // ===== TẠM COMMENT PHẦN IN: chỉ tạo PDF, chưa gửi ra máy in =====
-    // await print(tmpPdf, { printer: PRINTER_NAME });
-    res.json({ ok: true, file: tmpPdf, printer: PRINTER_NAME, printed: false });
+    // In thật ra máy in
+    await print(tmpPdf, { printer: PRINTER_NAME });
+    res.json({ ok: true, file: tmpPdf, printer: PRINTER_NAME });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
