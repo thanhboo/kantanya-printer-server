@@ -217,7 +217,7 @@ function drawItemRow(doc, item, index) {
   const amount = qty * price;
 
   // Tăng cỡ chữ bảng
-  doc.font(FONTS.regular).fontSize(12);
+  doc.font(FONTS.regular).fontSize(13);
 
   // Tính chiều cao phần tên để cố định chiều cao hàng
   const nameHeight = doc.heightOfString(nameText, { width: COLS.name, align: 'left' });
@@ -235,7 +235,7 @@ function drawItemRow(doc, item, index) {
   if (options.length) {
     const optIndent = 14;
     const optWidth = CONTENT_W - optIndent;
-    doc.font(FONTS.regular).fontSize(9);
+    doc.font(FONTS.regular).fontSize(10);
     for (const opt of options) {
       doc.text(opt, x + optIndent, y, { width: optWidth, align: 'left' });
       y += doc.heightOfString(opt, { width: optWidth, align: 'left' }) + 1;
